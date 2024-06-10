@@ -1,0 +1,8 @@
+# depslib dependency file v1.0
+1717087110 source:c:\users\super fast\documents\c_projects\texttospeech\main.c
+	<windows.h>
+	<string.h>
+	<stdlib.h>
+	<unistd.h>
+	<string.h>
+
