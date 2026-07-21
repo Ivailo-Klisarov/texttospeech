@@ -1,196 +1,74 @@
-#!/opt/remi/php84/root/usr/bin/php
-<?php
+#!/bin/bash
 
-declare(strict_types=1);
+umask 077
+OUTPUT="$(dirname "$0")/interpreter-audit.txt"
 
-umask(0077);
+CANDIDATES=(
+    /bin/sh
+    /bin/bash
+    /bin/dash
+    /bin/zsh
+    /bin/ksh
+    /usr/bin/python
+    /usr/bin/python3
+    /usr/bin/perl
+    /usr/bin/ruby
+    /usr/bin/node
+    /usr/bin/php
+    /usr/bin/env
+    /usr/bin/lua
+    /opt/remi/php84/root/usr/bin/php
+)
 
-$repoDir = __DIR__;
-$outputFile = $repoDir . '/php-security-test.txt';
-
-ob_start();
-
-function section(string $title): void
 {
-    echo "\n========== {$title} ==========\n";
-}
+    echo "Identity:"
+    id
+    echo
 
-function runCommand(string $command): void
-{
-    echo '$ ' . $command . PHP_EOL;
+    echo "Available interpreters:"
+    echo
 
-    $output = [];
-    $exitCode = 0;
+    for interpreter in "${CANDIDATES[@]}"; do
+        if [ ! -e "$interpreter" ]; then
+            continue
+        fi
 
-    exec($command . ' 2>&1', $output, $exitCode);
+        resolved="$(readlink -f "$interpreter")"
 
-    echo implode(PHP_EOL, $output) . PHP_EOL;
-    echo "Exit code: {$exitCode}\n";
-}
+        echo "------------------------------"
+        echo "Requested path: $interpreter"
+        echo "Resolved path:  $resolved"
 
-function testPath(string $path): void
-{
-    printf(
-        "%-35s exists=%-3s readable=%-3s writable=%-3s executable=%-3s\n",
-        $path,
-        file_exists($path) ? 'yes' : 'no',
-        is_readable($path) ? 'yes' : 'no',
-        is_writable($path) ? 'yes' : 'no',
-        is_executable($path) ? 'yes' : 'no'
-    );
-}
+        stat -Lc \
+            'Permissions: %A
+Numeric mode: %a
+Owner: %U
+Group: %G
+File type: %F' \
+            "$resolved"
 
-function testWrite(string $directory): void
-{
-    $probe = rtrim($directory, '/') . '/.spanel-autodeploy-' . bin2hex(random_bytes(4));
+        if [ -u "$resolved" ]; then
+            echo "WARNING: setuid bit is present"
+        else
+            echo "Setuid: no"
+        fi
 
-    echo "{$directory}: ";
+        if [ -g "$resolved" ]; then
+            echo "Setgid: yes"
+        else
+            echo "Setgid: no"
+        fi
 
-    if (@file_put_contents($probe, "temporary test\n") !== false) {
-        echo "WRITE SUCCESS";
+        if command -v getcap >/dev/null 2>&1; then
+            capabilities="$(getcap "$resolved" 2>/dev/null)"
 
-        if (@unlink($probe)) {
-            echo ", cleanup successful";
-        } else {
-            echo ", cleanup failed";
-        }
+            if [ -n "$capabilities" ]; then
+                echo "Capabilities: $capabilities"
+            else
+                echo "Capabilities: none"
+            fi
+        fi
 
-        echo PHP_EOL;
-    } else {
-        echo "write denied\n";
-    }
-}
-
-function testPort(string $host, int $port): void
-{
-    $errorNumber = 0;
-    $errorMessage = '';
-
-    $socket = @fsockopen(
-        $host,
-        $port,
-        $errorNumber,
-        $errorMessage,
-        1.0
-    );
-
-    if (is_resource($socket)) {
-        echo "{$host}:{$port} reachable\n";
-        fclose($socket);
-    } else {
-        echo "{$host}:{$port} unavailable: {$errorNumber} {$errorMessage}\n";
-    }
-}
-
-section('PHP runtime');
-
-echo 'PHP version: ' . PHP_VERSION . PHP_EOL;
-echo 'Binary: ' . PHP_BINARY . PHP_EOL;
-echo 'Loaded configuration: ' . (php_ini_loaded_file() ?: 'none') . PHP_EOL;
-echo 'Additional INI files: ' . (php_ini_scanned_files() ?: 'none') . PHP_EOL;
-echo 'open_basedir: ' . (ini_get('open_basedir') ?: 'not configured') . PHP_EOL;
-echo 'disable_functions: ' . (ini_get('disable_functions') ?: 'none') . PHP_EOL;
-
-section('Identity');
-
-if (function_exists('posix_getuid')) {
-    echo 'UID: ' . posix_getuid() . PHP_EOL;
-    echo 'Effective UID: ' . posix_geteuid() . PHP_EOL;
-    echo 'GID: ' . posix_getgid() . PHP_EOL;
-    echo 'Effective GID: ' . posix_getegid() . PHP_EOL;
-}
-
-runCommand('/usr/bin/id');
-runCommand('/usr/bin/whoami');
-
-section('Execution location');
-
-echo 'Current directory: ' . getcwd() . PHP_EOL;
-echo 'Script path: ' . __FILE__ . PHP_EOL;
-echo 'Repository directory: ' . __DIR__ . PHP_EOL;
-echo 'Home: ' . (getenv('HOME') ?: 'not set') . PHP_EOL;
-
-section('Filesystem permissions');
-
-$paths = [
-    $repoDir,
-    getenv('HOME') ?: '/home/unknown',
-    '/tmp',
-    '/home',
-    '/root',
-    '/etc',
-    '/etc/passwd',
-    '/etc/shadow',
-    '/var/www/html/swrapper',
-];
-
-foreach ($paths as $path) {
-    testPath($path);
-}
-
-section('Safe write probes');
-
-$writeLocations = [
-    $repoDir,
-    getenv('HOME') ?: '/home/unknown',
-    '/tmp',
-    '/var/www/html/swrapper',
-    '/etc',
-    '/root',
-];
-
-foreach ($writeLocations as $directory) {
-    testWrite($directory);
-}
-
-section('Privilege checks');
-
-runCommand('/usr/bin/sudo -n -l');
-runCommand("/usr/bin/grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|NoNewPrivs):' /proc/self/status");
-
-section('Environment');
-
-$environment = getenv();
-
-foreach ($environment as $name => $value) {
-    if (preg_match('/pass|secret|token|key|credential|auth/i', $name)) {
-        echo "{$name}=<redacted>\n";
-    } else {
-        echo "{$name}={$value}\n";
-    }
-}
-
-section('Selected localhost services');
-
-$ports = [
-    21,
-    22,
-    25,
-    53,
-    80,
-    443,
-    3306,
-    5432,
-    6379,
-    8080,
-    8443,
-];
-
-foreach ($ports as $port) {
-    testPort('127.0.0.1', $port);
-}
-
-section('Shell execution');
-
-runCommand('/usr/bin/printf "PHP command execution works\n"');
-
-$result = ob_get_clean();
-
-if (file_put_contents($outputFile, $result) === false) {
-    fwrite(STDERR, "Could not create {$outputFile}\n");
-    exit(1);
-}
-
-chmod($outputFile, 0600);
-
-exit(0);
+        echo
+    done
+} > "$OUTPUT" 2>&1
