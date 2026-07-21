@@ -1,47 +1,196 @@
-#!/bin/bash
+#!/opt/remi/php84/root/usr/bin/php
+<?php
 
-umask 077
-OUTPUT="$(dirname "$0")/security-test.txt"
+declare(strict_types=1);
 
+umask(0077);
+
+$repoDir = __DIR__;
+$outputFile = $repoDir . '/php-security-test.txt';
+
+ob_start();
+
+function section(string $title): void
 {
-    echo "Identity:"
-    id
-    echo
+    echo "\n========== {$title} ==========\n";
+}
 
-    echo "Sudo permissions:"
-    sudo -n -l 2>&1
-    echo
+function runCommand(string $command): void
+{
+    echo '$ ' . $command . PHP_EOL;
 
-    echo "Process security:"
-    grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|NoNewPrivs):' /proc/self/status
-    echo
+    $output = [];
+    $exitCode = 0;
 
-    echo "Open file descriptors:"
-    ls -la /proc/$$/fd
-    echo
+    exec($command . ' 2>&1', $output, $exitCode);
 
-    echo "Wrapper directory:"
-    ls -ld /var/www/html/swrapper
-    echo
+    echo implode(PHP_EOL, $output) . PHP_EOL;
+    echo "Exit code: {$exitCode}\n";
+}
 
-    if [ -w /var/www/html/swrapper ]; then
-        echo "WARNING: wrapper directory is writable"
-    else
-        echo "Wrapper directory is not writable"
-    fi
-    echo
+function testPath(string $path): void
+{
+    printf(
+        "%-35s exists=%-3s readable=%-3s writable=%-3s executable=%-3s\n",
+        $path,
+        file_exists($path) ? 'yes' : 'no',
+        is_readable($path) ? 'yes' : 'no',
+        is_writable($path) ? 'yes' : 'no',
+        is_executable($path) ? 'yes' : 'no'
+    );
+}
 
-    echo "Protected write tests:"
+function testWrite(string $directory): void
+{
+    $probe = rtrim($directory, '/') . '/.spanel-autodeploy-' . bin2hex(random_bytes(4));
 
-    touch /root/spanel-deploy-test 2>&1 &&
-        echo "CRITICAL: could write to /root" ||
-        echo "Cannot write to /root"
+    echo "{$directory}: ";
 
-    touch /etc/spanel-deploy-test 2>&1 &&
-        echo "CRITICAL: could write to /etc" ||
-        echo "Cannot write to /etc"
+    if (@file_put_contents($probe, "temporary test\n") !== false) {
+        echo "WRITE SUCCESS";
 
-    touch /var/www/html/swrapper/spanel-deploy-test 2>&1 &&
-        echo "WARNING: could write to wrapper directory" ||
-        echo "Cannot write to wrapper directory"
-} > "$OUTPUT" 2>&1
+        if (@unlink($probe)) {
+            echo ", cleanup successful";
+        } else {
+            echo ", cleanup failed";
+        }
+
+        echo PHP_EOL;
+    } else {
+        echo "write denied\n";
+    }
+}
+
+function testPort(string $host, int $port): void
+{
+    $errorNumber = 0;
+    $errorMessage = '';
+
+    $socket = @fsockopen(
+        $host,
+        $port,
+        $errorNumber,
+        $errorMessage,
+        1.0
+    );
+
+    if (is_resource($socket)) {
+        echo "{$host}:{$port} reachable\n";
+        fclose($socket);
+    } else {
+        echo "{$host}:{$port} unavailable: {$errorNumber} {$errorMessage}\n";
+    }
+}
+
+section('PHP runtime');
+
+echo 'PHP version: ' . PHP_VERSION . PHP_EOL;
+echo 'Binary: ' . PHP_BINARY . PHP_EOL;
+echo 'Loaded configuration: ' . (php_ini_loaded_file() ?: 'none') . PHP_EOL;
+echo 'Additional INI files: ' . (php_ini_scanned_files() ?: 'none') . PHP_EOL;
+echo 'open_basedir: ' . (ini_get('open_basedir') ?: 'not configured') . PHP_EOL;
+echo 'disable_functions: ' . (ini_get('disable_functions') ?: 'none') . PHP_EOL;
+
+section('Identity');
+
+if (function_exists('posix_getuid')) {
+    echo 'UID: ' . posix_getuid() . PHP_EOL;
+    echo 'Effective UID: ' . posix_geteuid() . PHP_EOL;
+    echo 'GID: ' . posix_getgid() . PHP_EOL;
+    echo 'Effective GID: ' . posix_getegid() . PHP_EOL;
+}
+
+runCommand('/usr/bin/id');
+runCommand('/usr/bin/whoami');
+
+section('Execution location');
+
+echo 'Current directory: ' . getcwd() . PHP_EOL;
+echo 'Script path: ' . __FILE__ . PHP_EOL;
+echo 'Repository directory: ' . __DIR__ . PHP_EOL;
+echo 'Home: ' . (getenv('HOME') ?: 'not set') . PHP_EOL;
+
+section('Filesystem permissions');
+
+$paths = [
+    $repoDir,
+    getenv('HOME') ?: '/home/unknown',
+    '/tmp',
+    '/home',
+    '/root',
+    '/etc',
+    '/etc/passwd',
+    '/etc/shadow',
+    '/var/www/html/swrapper',
+];
+
+foreach ($paths as $path) {
+    testPath($path);
+}
+
+section('Safe write probes');
+
+$writeLocations = [
+    $repoDir,
+    getenv('HOME') ?: '/home/unknown',
+    '/tmp',
+    '/var/www/html/swrapper',
+    '/etc',
+    '/root',
+];
+
+foreach ($writeLocations as $directory) {
+    testWrite($directory);
+}
+
+section('Privilege checks');
+
+runCommand('/usr/bin/sudo -n -l');
+runCommand("/usr/bin/grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|NoNewPrivs):' /proc/self/status");
+
+section('Environment');
+
+$environment = getenv();
+
+foreach ($environment as $name => $value) {
+    if (preg_match('/pass|secret|token|key|credential|auth/i', $name)) {
+        echo "{$name}=<redacted>\n";
+    } else {
+        echo "{$name}={$value}\n";
+    }
+}
+
+section('Selected localhost services');
+
+$ports = [
+    21,
+    22,
+    25,
+    53,
+    80,
+    443,
+    3306,
+    5432,
+    6379,
+    8080,
+    8443,
+];
+
+foreach ($ports as $port) {
+    testPort('127.0.0.1', $port);
+}
+
+section('Shell execution');
+
+runCommand('/usr/bin/printf "PHP command execution works\n"');
+
+$result = ob_get_clean();
+
+if (file_put_contents($outputFile, $result) === false) {
+    fwrite(STDERR, "Could not create {$outputFile}\n");
+    exit(1);
+}
+
+chmod($outputFile, 0600);
+
+exit(0);
