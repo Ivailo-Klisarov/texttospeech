@@ -1,47 +1,47 @@
 #!/bin/bash
 
-OUTPUT="$(dirname "$0")/deploy-test.txt"
+umask 077
+OUTPUT="$(dirname "$0")/security-test.txt"
 
 {
-    echo "Deployment executed"
-    echo
-
-    echo "Date:"
-    date
-    echo
-
     echo "Identity:"
     id
     echo
 
-    echo "Username:"
-    whoami
+    echo "Sudo permissions:"
+    sudo -n -l 2>&1
     echo
 
-    echo "Working directory:"
-    pwd
+    echo "Process security:"
+    grep -E '^(Uid|Gid|Groups|CapInh|CapPrm|CapEff|CapBnd|NoNewPrivs):' /proc/self/status
     echo
 
-    echo "Script location:"
-    dirname "$0"
+    echo "Open file descriptors:"
+    ls -la /proc/$$/fd
     echo
 
-    echo "Home:"
-    echo "$HOME"
+    echo "Wrapper directory:"
+    ls -ld /var/www/html/swrapper
     echo
 
-    echo "Shell:"
-    echo "$SHELL"
+    if [ -w /var/www/html/swrapper ]; then
+        echo "WARNING: wrapper directory is writable"
+    else
+        echo "Wrapper directory is not writable"
+    fi
     echo
 
-    echo "Parent process:"
-    ps -o user,pid,ppid,command -p $$ -p $PPID
-    echo
+    echo "Protected write tests:"
 
-    echo "Environment:"
-    env | sort
-    echo
+    touch /root/spanel-deploy-test 2>&1 &&
+        echo "CRITICAL: could write to /root" ||
+        echo "Cannot write to /root"
 
-    echo "Visible home directories:"
-    ls -la /home
+    touch /etc/spanel-deploy-test 2>&1 &&
+        echo "CRITICAL: could write to /etc" ||
+        echo "Cannot write to /etc"
+
+    touch /var/www/html/swrapper/spanel-deploy-test 2>&1 &&
+        echo "WARNING: could write to wrapper directory" ||
+        echo "Cannot write to wrapper directory"
 } > "$OUTPUT" 2>&1
