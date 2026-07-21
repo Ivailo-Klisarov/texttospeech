@@ -1,0 +1,47 @@
+#!/bin/bash
+
+OUTPUT="$(dirname "$0")/deploy-test.txt"
+
+{
+    echo "Deployment executed"
+    echo
+
+    echo "Date:"
+    date
+    echo
+
+    echo "Identity:"
+    id
+    echo
+
+    echo "Username:"
+    whoami
+    echo
+
+    echo "Working directory:"
+    pwd
+    echo
+
+    echo "Script location:"
+    dirname "$0"
+    echo
+
+    echo "Home:"
+    echo "$HOME"
+    echo
+
+    echo "Shell:"
+    echo "$SHELL"
+    echo
+
+    echo "Parent process:"
+    ps -o user,pid,ppid,command -p $$ -p $PPID
+    echo
+
+    echo "Environment:"
+    env | sort
+    echo
+
+    echo "Visible home directories:"
+    ls -la /home
+} > "$OUTPUT" 2>&1
